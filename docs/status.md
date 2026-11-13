@@ -34,9 +34,16 @@
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File protocol/selftest.ps1   # 断言数见输出
-powershell -ExecutionPolicy Bypass -File tools/lint-app.ps1      # 6 条静态规则
+powershell -ExecutionPolicy Bypass -File tools/lint-app.ps1      # 静态规则
 powershell -ExecutionPolicy Bypass -File build.ps1               # 产出 APK，退出码 0
 ```
+
+### CI 产出
+
+- `.github/workflows/ci.yml`：每次 push 到 main / PR 都跑自检 + 静态检查，并把 APK 作为 artifact 上传
+- `.github/workflows/release.yml`：推 `v*` tag 自动构建并创建 Release（`versionName` 取 tag，
+  `versionCode` 取提交总数）
+- 已实测通过：`ci` 与 `release` 两个工作流都跑通，Release 里的 APK 版本名与 tag 一致
 
 ---
 

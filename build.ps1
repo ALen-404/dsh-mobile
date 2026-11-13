@@ -18,6 +18,10 @@ param(
     [string]$OutName = "",
     [string]$JdkPath = "",
     [string]$SdkPath = "",
+    # Pin the toolchain versions (defaults keep this repo reproducible; CI falls back to
+    # the newest installed one only if the pinned dir is absent).
+    [string]$BuildToolsVersion = "",
+    [string]$PlatformVersion = "",
     # Override the version stamped into the APK (CI passes the tag, e.g. 0.2.0).
     [string]$VersionName = "",
     [int]$VersionCode = 0
@@ -58,11 +62,19 @@ $sdk = if ($SdkPath) { $SdkPath }
        elseif ($env:ANDROID_HOME) { $env:ANDROID_HOME }
        else { Join-Path $toolchain 'sdk' }
 
-# Pick the highest available build-tools / platform (CI images differ from this repo's pinned 34.0.0).
-# Directory names look like "34.0.0" (build-tools) or "android-34" (platforms),
-# so match a trailing numeric version instead of the whole name.
-function NewestDir($parent, $what) {
+# Pick build-tools / platform.
+# Preference order: an explicitly pinned version if present (keeps builds reproducible
+# against what this repo was tested with), otherwise the highest available.
+# CI images ship several platforms, so "always newest" would silently change compileSdk.
+function NewestDir($parent, $what, $preferred) {
     if (-not (Test-Path $parent)) { throw "missing $what : $parent  (run toolchain/fetch-toolchain.ps1 first)" }
+    if ($preferred) {
+        $pinned = Get-ChildItem $parent -Directory | Where-Object { $_.Name -eq $preferred } | Select-Object -First 1
+        if ($pinned) {
+            Write-Host ("      $what : " + $pinned.FullName + " (pinned)")
+            return $pinned.FullName
+        }
+    }
     $candidates = Get-ChildItem $parent -Directory | ForEach-Object {
         $m = [regex]::Match($_.Name, '(\d+(?:\.\d+)*)$')
         if ($m.Success) {
@@ -82,8 +94,8 @@ function NewestDir($parent, $what) {
     Write-Host ("      $what : " + $best.Path)
     return $best.Path
 }
-$bt = NewestDir (Join-Path $sdk 'build-tools') 'build-tools'
-$platform = NewestDir (Join-Path $sdk 'platforms') 'Android platform'
+$bt = NewestDir (Join-Path $sdk 'build-tools') 'build-tools' $(if ($BuildToolsVersion) { $BuildToolsVersion } else { '34.0.0' })
+$platform = NewestDir (Join-Path $sdk 'platforms') 'Android platform' $(if ($PlatformVersion) { $PlatformVersion } else { 'android-34' })
 $androidJar = Join-Path $platform 'android.jar'
 
 $app = Join-Path $root 'app'

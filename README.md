@@ -80,7 +80,6 @@ dsh web: http://127.0.0.1:3080/?token=xxxxxxxx
   只能拿到失败路径），所以模型输出的渲染是按 schema 兜底实现的
 - 原生模式**不能做**：事件回放、原生附件预览、多实例 Cookie 真隔离
 - Markdown 是轻量实现：不做 HTML 内嵌、表格对齐语义
-- **CI 尚未启用**：工作流已写好放在 `tools/github/`，启用需要给 gh token 加 `workflow` scope，见该目录 README
 
 ## 构建
 
@@ -104,6 +103,28 @@ dsh web: http://127.0.0.1:3080/?token=xxxxxxxx
 
 详见 [docs/build.md](docs/build.md)（含 7 个踩过的坑）。
 
+## CI / CD
+
+两个 GitHub Actions 工作流（`.github/workflows/`）：
+
+| 工作流 | 触发 | 做什么 |
+|---|---|---|
+| `ci.yml` | push 到 main / PR | 跑协议自检 + 静态检查，**并打出 APK 作为 artifact**（每次提交都能从 Actions 页面下载安装包） |
+| `release.yml` | 推 `v*` tag | 用 tag 的版本号构建，自动创建 Release 并附上 APK |
+
+发版就一条命令：
+
+```bash
+git tag v0.3.0 && git push origin v0.3.0
+```
+
+- `versionName` 取 tag（`v0.2.0` → `0.2.0`）；`versionCode` 取**提交总数**（跨 workflow 单调，
+  避免不同 workflow 各自的 `run_number` 重号）
+- `build.ps1` 用 `-VersionName/-VersionCode` 接收，并写进一份临时的 AndroidManifest 副本
+  （`aapt2 link` 没有这类参数，那是老 aapt 的选项）
+- CI 里用现生成的 debug keystore 签名，所以**每次运行的签名不同** —— 只适合自测分发；
+  要稳定签名（可覆盖升级）得把 keystore 放进 Secrets，尚未实现
+
 ## 项目结构
 
 ```
@@ -117,7 +138,7 @@ protocol/          协议层：纯 JDK，零 Android 依赖，可独立编译与
 app/               Android 外壳：纯 framework Views，零 androidx
 docs/              设计复盘 / 能力矩阵 / 协议笔记 / 构建踩坑 / 真机清单 / 体检规则
 tools/             开发辅助：dev-instance.ps1（隔离实例）、lint-app.ps1（静态检查）
-tools/github/      GitHub Actions 工作流（ci / release）
+.github/workflows/ CI：ci.yml（自检 + 打包）、release.yml（tag 发布）
 build.ps1          构建脚本
 ```
 
@@ -127,7 +148,7 @@ build.ps1          构建脚本
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File protocol/selftest.ps1   # 协议自检 + WebSocket 端到端
-powershell -ExecutionPolicy Bypass -File tools/lint-app.ps1      # 6 条"真机才炸"的静态规则
+powershell -ExecutionPolicy Bypass -File tools/lint-app.ps1      # "编译通过但真机才炸"的静态规则
 powershell -ExecutionPolicy Bypass -File build.ps1               # 构建 APK
 ```
 
