@@ -82,7 +82,9 @@ public final class Capabilities {
                 {"A + B 模式", "历史回填 + 实时事件", api},
                 {"A + B 模式", "原生发消息", api},
                 {"A + B 模式", "工具调用卡片", api},
-                {"A + B 模式", "Markdown-lite（代码块）", api},
+                {"A + B 模式", "Markdown（代码块/表格/列表/行内样式）", api},
+                {"A + B 模式", "原生发送附件（图片内联、其它文件先上传）", api},
+                {"A + B 模式", "断线自动重连（指数退避）", api},
         };
     }
 }

@@ -96,6 +96,125 @@ public final class DshClient {
                 + Json.escape(text) + "\"}]}}";
     }
 
+    /* ---------------- 附件 ---------------- */
+
+    /** 文件内容片段（先上传拿到 receiptId）。 */
+    public static String filePart(String receiptId) {
+        return "{\"type\":\"file\",\"receiptId\":" + Json.quote(receiptId) + "}";
+    }
+
+    /** 图片内容片段（直接内联 base64，不需要上传）。 */
+    public static String imagePart(String mediaType, String base64, String name) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"type\":\"image\",\"mediaType\":").append(Json.quote(mediaType))
+                .append(",\"data\":").append(Json.quote(base64));
+        if (name != null && !name.isEmpty()) {
+            sb.append(",\"name\":").append(Json.quote(name));
+        }
+        return sb.append('}').toString();
+    }
+
+    /**
+     * 构造带附件/图片的 prompt 参数。
+     *
+     * @param text    文本部分；可以为空（服务端允许"只有附件"）
+     * @param extraParts 由 {@link #filePart} / {@link #imagePart} 生成的片段
+     */
+    public static String promptArgs(String sessionId, String requestId, String text,
+                                    java.util.List<String> extraParts) {
+        StringBuilder content = new StringBuilder("[");
+        boolean first = true;
+        if (text != null && !text.trim().isEmpty()) {
+            content.append("{\"type\":\"text\",\"text\":").append(Json.quote(text)).append('}');
+            first = false;
+        }
+        if (extraParts != null) {
+            for (String part : extraParts) {
+                if (part == null || part.isEmpty()) {
+                    continue;
+                }
+                if (!first) {
+                    content.append(',');
+                }
+                content.append(part);
+                first = false;
+            }
+        }
+        content.append(']');
+        return "{\"request\":{\"requestId\":\"" + Json.escape(requestId)
+                + "\",\"sessionId\":\"" + Json.escape(sessionId)
+                + "\",\"mode\":\"queue\",\"content\":" + content + "}}";
+    }
+
+    /**
+     * 上传一个文件到会话，返回**响应体原文**（用 {@link #parseUploadReceiptId} 取 receiptId）。
+     *
+     * <p>实测协议（2026-11-13）：
+     * <pre>
+     * POST /api/session/uploadFileBinary?sessionId=&lt;id&gt;&amp;name=&lt;文件名&gt;
+     * content-type: application/octet-stream
+     * body: 原始字节
+     * → {"ok":true,"value":{"receiptId":"…","file":{"attachmentId":"sha256:…","name":"…","bytes":39}}}
+     * </pre>
+     */
+    public static String uploadFile(Session session, String sessionId, String name, byte[] data)
+            throws IOException {
+        StringBuilder query = new StringBuilder("/api/session/uploadFileBinary?sessionId=")
+                .append(urlEncode(sessionId));
+        if (name != null && !name.isEmpty()) {
+            query.append("&name=").append(urlEncode(name));
+        }
+        return UnaryRpc.postRaw(session.baseUrl, query.toString(), session.cookie, data, 60000);
+    }
+
+    /** 从上传响应里取 receiptId；取不到返回空串。 */
+    public static String parseUploadReceiptId(String responseBody) {
+        if (responseBody == null || responseBody.isEmpty()) {
+            return "";
+        }
+        try {
+            Object root = Json.parse(responseBody);
+            String id = Json.str(Json.path(root, "value"), "receiptId", "");
+            if (id.isEmpty()) {
+                // 兼容外层再包一层 result 的形状
+                id = Json.str(Json.path(root, "result", "value"), "receiptId", "");
+            }
+            return id;
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
+    /** 只做百分号编码（用于查询参数）。 */
+    static String urlEncode(String value) {
+        StringBuilder sb = new StringBuilder();
+        byte[] bytes = (value == null ? "" : value).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        for (byte b : bytes) {
+            int c = b & 0xFF;
+            boolean safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+                    || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
+            if (safe) {
+                sb.append((char) c);
+            } else {
+                sb.append('%').append(Character.toUpperCase(Character.forDigit((c >> 4) & 0xF, 16)))
+                        .append(Character.toUpperCase(Character.forDigit(c & 0xF, 16)));
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 发一条带附件/图片的消息。
+     *
+     * @param extraParts 由 {@link #filePart} / {@link #imagePart} 生成的片段
+     */
+    public static String prompt(Session session, String sessionId, String text,
+                                java.util.List<String> extraParts) throws IOException {
+        String requestId = "mobile-" + System.currentTimeMillis() + "-"
+                + Integer.toHexString(text == null ? 0 : text.hashCode());
+        return call(session, "session/prompt", promptArgs(sessionId, requestId, text, extraParts));
+    }
+
     /**
      * 给会话发一条文本消息。
      *

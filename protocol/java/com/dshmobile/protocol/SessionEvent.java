@@ -64,7 +64,10 @@ public final class SessionEvent {
 
     /**
      * 从 {@code content:[{type:"text",text:"…"}]} 里拼出纯文本。
-     * 图片/文件等非文本片段会被跳过（原生渲染以后再补）。
+     *
+     * <p>非文本片段（图片/文件）会渲染成一个可读的占位：
+     * 图片 → {@code [图片]}；文件 → {@code [附件: 文件名]}（名字在
+     * {@code attachment.name} 里，事件日志里服务端会把 receiptId 解析成 attachment 对象）。
      */
     static String textOfContent(Object contentNode) {
         StringBuilder sb = new StringBuilder();
@@ -84,11 +87,27 @@ public final class SessionEvent {
                     if (sb.length() > 0) {
                         sb.append('\n');
                     }
-                    sb.append('[').append(type).append(']');
+                    sb.append(labelOfPart(part, type)).append(']');
                 }
             }
         }
         return sb.toString();
+    }
+
+    private static String labelOfPart(Object part, String type) {
+        if ("file".equals(type)) {
+            Object attachment = Json.get(part, "attachment");
+            String name = Json.str(attachment, "name", "");
+            if (name.isEmpty()) {
+                name = Json.str(part, "name", "");
+            }
+            return name.isEmpty() ? "[附件" : "[附件: " + name;
+        }
+        if ("image".equals(type)) {
+            String name = Json.str(part, "name", "");
+            return name.isEmpty() ? "[图片" : "[图片: " + name;
+        }
+        return "[" + type;
     }
 
     @Override

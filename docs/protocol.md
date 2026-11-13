@@ -334,3 +334,55 @@ node protocol/test/dsh-methods.mjs --json   # 机器可读
 
 asar header 里文件的 `size` / `offset` 可能是**字符串**（大数值序列化所致），
 直接 `Number.isFinite()` 会判 false，导致"文件明明在却读不到"。必须先 `Number()` 再判断。
+
+## 12. 附件（实测，2026-11-13）
+
+DSH 有两种附件通道，**图片不需要上传**：
+
+### 12.1 图片：直接内联 base64
+
+`session/prompt` 的 content 里放一个 image 片段即可（schema 描述：`data` 是
+"Canonical base64 encoding of the image bytes"）：
+
+```jsonc
+{ "type": "image", "mediaType": "image/png", "data": "<base64>", "name": "可选" }
+```
+
+支持的 mediaType：`image/png` / `image/jpeg` / `image/webp` / `image/gif`
+（服务端会按字节校验，声明错会被拒）。
+
+### 12.2 其它文件：先上传拿 receiptId
+
+```jsonc
+POST /api/session/uploadFileBinary?sessionId=<id>&name=<文件名>
+content-type: application/octet-stream
+body: 原始字节
+
+→ 200 {"ok":true,"value":{
+      "receiptId": "9ef0df49-…",
+      "file": {"attachmentId":"sha256:…","name":"probe.txt","bytes":39}
+   }}
+```
+
+然后把 receiptId 放进 prompt：
+
+```jsonc
+{ "type": "file", "receiptId": "9ef0df49-…" }
+```
+
+服务端落盘后会把 receiptId **解析成 attachment 对象**，事件日志里看到的是：
+
+```jsonc
+{"type":"file","attachment":{"attachmentId":"sha256:…","name":"probe.txt","bytes":39}}
+```
+
+所以渲染历史时按 `attachment.name` 取文件名即可（本项目 `SessionEvent.textOfContent` 就是这么做的）。
+
+### 12.3 踩过的坑
+
+- **上传与消息落盘是异步的**：prompt 返回 `accepted:true` 只代表入队，事件日志里
+  出现 `user/message` 实测要 ~3 秒，机器慢时更久。用固定 `sleep` 做断言会假失败 ——
+  `LiveSelfTest` 改成轮询。
+- `session/list` 的参数是 `{_request:{}}`（不是 `{request:{}}`），
+  而 `session/page`/`prompt`/`projections` 用 `{request:{…}}` —— 混用会得到
+  `gateway/arguments-invalid`。

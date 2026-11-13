@@ -115,12 +115,20 @@ public final class LiveSelfTest {
             } catch (Exception e) {
                 System.out.println("      prompt 返回错误（预期）：" + trim(e.getMessage(), 120));
             }
-            Thread.sleep(5000);
-
-            // 读事件日志并折叠成对话（这才是原生聊天要渲染的东西）
-            String pageBody = DshClient.page(session, sessionId);
-            java.util.List<SessionEvent> events = SessionEvent.parsePage(pageBody);
+            // 读事件日志并折叠成对话（这才是原生聊天要渲染的东西）。
+            // DSH 异步处理，落盘时间不定 —— **轮询**，不要固定 sleep（会假失败）。
+            java.util.List<SessionEvent> events = new java.util.ArrayList<>();
             SessionTranscript transcript = SessionTranscript.fold(events);
+            for (int attempt = 0; attempt < 12; attempt++) {
+                Thread.sleep(1000);
+                events = SessionEvent.parsePage(DshClient.page(session, sessionId));
+                transcript = SessionTranscript.fold(events);
+                boolean ready = transcript.entries.stream().anyMatch(
+                        e -> SessionTranscript.ROLE_USER.equals(e.role) && e.text.contains(probeText));
+                if (ready && events.size() > 3) {
+                    break;
+                }
+            }
             java.util.Map<String, Integer> counts = new java.util.LinkedHashMap<>();
             for (SessionEvent e : events) {
                 counts.merge(e.type, 1, Integer::sum);
@@ -146,7 +154,77 @@ public final class LiveSelfTest {
             }
 
             // 实时流：订阅 → 再发一条 → 收到增量事件
-            return checkLiveStream(session, sessionId);
+            if (!checkLiveStream(session, sessionId)) {
+                return false;
+            }
+            // 附件：上传 → receiptId → 带附件的 prompt（App 的「＋」走的就是这条）
+            return checkAttachment(session, sessionId);
+        } catch (Exception e) {
+            System.out.println("  ❌ " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 验证原生附件：{@code POST /api/session/uploadFileBinary} → receiptId → prompt 的 file 片段。
+     *
+     * <p>这是 App 里「＋ 选择文件」的完整路径；图片则走内联 base64（不经过这里）。
+     */
+    private static boolean checkAttachment(DshClient.Session session, String sessionId) {
+        try {
+            System.out.println("[6/6] 原生附件（上传 + 带附件发消息）…");
+            byte[] data = "hello attachment from LiveSelfTest\n"
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            String name = "probe-" + System.currentTimeMillis() + ".txt";
+            String uploadBody = DshClient.uploadFile(session, sessionId, name, data);
+            String receiptId = DshClient.parseUploadReceiptId(uploadBody);
+            if (receiptId.isEmpty()) {
+                System.out.println("  ❌ 上传没有返回 receiptId：" + trim(uploadBody, 200));
+                return false;
+            }
+            System.out.println("  ✅ 上传成功 receiptId=" + trim(receiptId, 12) + "…");
+
+            java.util.List<String> parts = new java.util.ArrayList<>();
+            parts.add(DshClient.filePart(receiptId));
+            String accepted = DshClient.prompt(session, sessionId, "（附件联调）", parts);
+            if (!accepted.contains("\"ok\":true")) {
+                System.out.println("  ❌ 带附件的 prompt 被拒绝：" + trim(accepted, 200));
+                return false;
+            }
+            System.out.println("  ✅ 带附件的消息已接受");
+
+            // 事件日志里应该能看到附件被服务端解析成 attachment 对象。
+            // DSH 是异步处理的（实测 ~3 秒落盘），所以**轮询**而不是固定 sleep ——
+            // 固定等待会随机器负载出现假失败。
+            boolean found = false;
+            SessionTranscript transcript = null;
+            int eventCount = 0;
+            for (int attempt = 0; attempt < 10 && !found; attempt++) {
+                Thread.sleep(1000);
+                String pageBody = DshClient.page(session, sessionId);
+                java.util.List<SessionEvent> events = SessionEvent.parsePage(pageBody);
+                eventCount = events.size();
+                transcript = SessionTranscript.fold(events);
+                for (SessionTranscript.Entry e : transcript.entries()) {
+                    if (SessionTranscript.ROLE_USER.equals(e.role) && e.text.contains(name)) {
+                        found = true;
+                        System.out.println("      事件里的用户消息：" + trim(e.text, 120));
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                System.out.println("  ⚠️  事件日志里没找到附件名，诊断：records=" + eventCount
+                        + "，对话条目=" + (transcript == null ? -1 : transcript.entries.size()));
+                if (transcript != null) {
+                    for (SessionTranscript.Entry e : transcript.entries()) {
+                        System.out.println("       [" + e.role + "] " + trim(e.text, 100));
+                    }
+                }
+            } else {
+                System.out.println("  ✅ 事件日志里能看到附件");
+            }
+            return true;
         } catch (Exception e) {
             System.out.println("  ❌ " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return false;

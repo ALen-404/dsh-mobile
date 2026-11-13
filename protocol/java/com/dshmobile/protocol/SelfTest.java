@@ -304,6 +304,70 @@ public final class SelfTest {
         check("代码块内的 ``` 之外的行原样保留", MarkdownLite.parse("```\n  indented\n\nblank\n```")
                 .get(0).text.startsWith("  indented"));
 
+        // --- Markdown 块级：标题 / 引用 / 列表 / 表格 ---
+        java.util.List<MarkdownLite.Block> headed = MarkdownLite.parse("# 一级\n## 二级\n正文");
+        check("标题层级", headed.size() == 3
+                && "heading".equals(headed.get(0).type) && headed.get(0).level == 1
+                && "一级".equals(headed.get(0).text)
+                && headed.get(1).level == 2);
+        check("标题后的正文仍是段落", "text".equals(headed.get(2).type) && "正文".equals(headed.get(2).text));
+
+        java.util.List<MarkdownLite.Block> quoted = MarkdownLite.parse("> 第一行\n> 第二行\n\n正文");
+        check("多行引用合并成一块", "quote".equals(quoted.get(0).type)
+                && quoted.get(0).text.contains("第一行") && quoted.get(0).text.contains("第二行"));
+        check("引用后面的正文", "text".equals(quoted.get(1).type));
+
+        java.util.List<MarkdownLite.Block> listed = MarkdownLite.parse("- 甲\n- 乙\n  - 乙一\n1. 丙");
+        check("无序列表项数", listed.size() == 4);
+        check("无序列表标记", listed.size() == 4 && listed.get(0).isList()
+                && !listed.get(0).ordered && "甲".equals(listed.get(0).text));
+        check("缩进识别为第二层", listed.size() == 4 && listed.get(2).level == 2);
+        check("有序列表识别", listed.size() == 4 && listed.get(3).ordered && "丙".equals(listed.get(3).text));
+
+        String tableText = "| 名称 | 值 |\n| --- | --- |\n| a | 1 |\n| b | 2 |";
+        java.util.List<MarkdownLite.Block> tab = MarkdownLite.parse(tableText);
+        check("表格解析成一块", tab.size() == 1 && tab.get(0).isTable());
+        check("表格行数（表头+2）", tab.size() == 1 && tab.get(0).rows.size() == 3);
+        check("表格单元格内容", tab.size() == 1
+                && "名称".equals(tab.get(0).rows.get(0).get(0))
+                && "2".equals(tab.get(0).rows.get(2).get(1)));
+        check("没有分隔行时不当表格", MarkdownLite.parse("a | b\nc | d").size() == 1
+                && !MarkdownLite.parse("a | b\nc | d").get(0).isTable());
+        check("无外框竖线的表格", MarkdownLite.parse("a | b\n--- | ---\n1 | 2")
+                .get(0).isTable());
+
+        // --- Markdown 行内 ---
+        java.util.List<MarkdownLite.Inline> inl = MarkdownLite.parseInline("前 **粗** 中 *斜* `码` [链](https://e.x) 后");
+        check("行内片段数", inl.size() == 9);
+        check("行内加粗", inl.size() == 9 && "bold".equals(inl.get(1).type) && "粗".equals(inl.get(1).text));
+        check("行内斜体", inl.size() == 9 && "italic".equals(inl.get(3).type));
+        check("行内代码", inl.size() == 9 && "code".equals(inl.get(5).type) && "码".equals(inl.get(5).text));
+        check("行内链接与目标", inl.size() == 9 && "link".equals(inl.get(7).type)
+                && "链".equals(inl.get(7).text) && "https://e.x".equals(inl.get(7).url));
+        check("行内代码里的星号不当强调",
+                MarkdownLite.parseInline("`a*b*c`").size() == 1
+                        && "code".equals(MarkdownLite.parseInline("`a*b*c`").get(0).type));
+        check("未闭合强调当普通文本", MarkdownLite.parseInline("三个星号 ** 未闭合").size() >= 1);
+        check("空行内文本返回空列表", MarkdownLite.parseInline("").isEmpty());
+
+        // --- 用户消息里的附件如何显示（事件日志里是 attachment 对象）---
+        String msgWithFile = "{\"result\":{\"value\":{\"records\":["
+                + "{\"type\":\"event\",\"event\":{\"type\":\"user/message\",\"seq\":1,\"time\":1,"
+                + "\"data\":{\"content\":[{\"type\":\"text\",\"text\":\"看看这个\"},"
+                + "{\"type\":\"file\",\"attachment\":{\"name\":\"报表.xlsx\",\"bytes\":39}}],"
+                + "\"source\":{\"kind\":\"user\"},\"role\":\"user\"}}},"
+                + "{\"type\":\"event\",\"event\":{\"type\":\"user/message\",\"seq\":2,\"time\":2,"
+                + "\"data\":{\"content\":[{\"type\":\"image\",\"name\":\"shot.png\"}],"
+                + "\"source\":{\"kind\":\"user\"},\"role\":\"user\"}}}"
+                + "]}}}";
+        SessionTranscript withFiles = SessionTranscript.fold(SessionEvent.parsePage(msgWithFile));
+        check("带附件用户消息折叠成功", withFiles.entries.size() == 2);
+        check("文件片段显示为附件名", withFiles.entries.size() == 2
+                && withFiles.entries.get(0).text.contains("看看这个")
+                && withFiles.entries.get(0).text.contains("[附件: 报表.xlsx]"));
+        check("图片片段显示为图片", withFiles.entries.size() == 2
+                && withFiles.entries.get(1).text.contains("[图片: shot.png]"));
+
         // --- 导出纯文本（「复制全文」的格式）---
         String exported = withTool.toPlainText();
         check("导出文本含工具块", exported.contains("【工具 · read_file】")
@@ -458,6 +522,52 @@ public final class SelfTest {
                 !new InstanceRecord("a", "http://h:1", "httpx://h/?token=abc").hasApiCredential());
         check("没有查询串不算凭证",
                 !new InstanceRecord("a", "http://h:1", "http://h:1/").hasApiCredential());
+
+        // --- Base64（自实现，为了兼容 minSdk 21；用已知向量校验）---
+        check("Base64 编码空串", "".equals(Base64Lite.encode(new byte[0])));
+        check("Base64 编码 'f'", "Zg==".equals(Base64Lite.encode("f".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        check("Base64 编码 'fo'", "Zm8=".equals(Base64Lite.encode("fo".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        check("Base64 编码 'foo'", "Zm9v".equals(Base64Lite.encode("foo".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        check("Base64 编码 'foob'", "Zm9vYg==".equals(Base64Lite.encode("foob".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        check("Base64 编码 'fooba'", "Zm9vYmE=".equals(Base64Lite.encode("fooba".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        check("Base64 编码 'foobar'", "Zm9vYmFy".equals(Base64Lite.encode("foobar".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        check("Base64 往返（含中文与二进制）", java.util.Arrays.equals(
+                "中文🙂\u0001\u00FF".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                Base64Lite.decode(Base64Lite.encode(
+                        "中文🙂\u0001\u00FF".getBytes(java.nio.charset.StandardCharsets.UTF_8)))));
+        check("Base64 解码忽略换行", "foobar".equals(new String(Base64Lite.decode("Zm9v\nYmFy"),
+                java.nio.charset.StandardCharsets.UTF_8)));
+
+        // --- 上传响应解析（实测形状）---
+        String uploadBody = "{\"ok\":true,\"value\":{\"receiptId\":\"9ef0df49-7272-4b71\","
+                + "\"file\":{\"attachmentId\":\"sha256:27d5\",\"name\":\"probe.txt\",\"bytes\":39}}}";
+        check("解析上传 receiptId", "9ef0df49-7272-4b71".equals(DshClient.parseUploadReceiptId(uploadBody)));
+        check("上传响应缺 receiptId 返回空", DshClient.parseUploadReceiptId("{\"ok\":true,\"value\":{}}").isEmpty());
+        check("上传响应坏 JSON 返回空", DshClient.parseUploadReceiptId("{oops").isEmpty());
+
+        // --- 附件载荷构造（prompt content）---
+        Object filePartNode = Json.parse(DshClient.filePart("r-1"));
+        check("文件片段结构", "file".equals(Json.str(filePartNode, "type", ""))
+                && "r-1".equals(Json.str(filePartNode, "receiptId", "")));
+        Object imagePartNode = Json.parse(DshClient.imagePart("image/png", "iVBORw0KGgo=", "a.png"));
+        check("图片片段结构（内联 base64）", "image".equals(Json.str(imagePartNode, "type", ""))
+                && "image/png".equals(Json.str(imagePartNode, "mediaType", ""))
+                && "iVBORw0KGgo=".equals(Json.str(imagePartNode, "data", ""))
+                && "a.png".equals(Json.str(imagePartNode, "name", "")));
+
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        parts.add(DshClient.filePart("r-1"));
+        Object withAttach = Json.parse(DshClient.promptArgs("s-1", "q-1", "看看这个", parts));
+        java.util.List<Object> attachContent = Json.list(Json.path(withAttach, "request"), "content");
+        check("带附件时 content 有两个片段", attachContent.size() == 2
+                && "text".equals(Json.str(attachContent.get(0), "type", ""))
+                && "file".equals(Json.str(attachContent.get(1), "type", "")));
+        Object onlyAttach = Json.parse(DshClient.promptArgs("s-1", "q-1", "  ", parts));
+        check("只有附件时也能构造（文本为空跳过）", Json.list(Json.path(onlyAttach, "request"), "content").size() == 1);
+
+        // --- 查询参数编码 ---
+        check("urlEncode 保留安全字符", "abc-._~123".equals(DshClient.urlEncode("abc-._~123")));
+        check("urlEncode 编码空格与中文", "a%20b%20%E4%B8%AD".equals(DshClient.urlEncode("a b 中")));
 
         System.out.println();
         System.out.println("通过 " + passed + " 项，失败 " + failed + " 项");

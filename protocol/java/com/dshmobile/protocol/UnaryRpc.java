@@ -118,6 +118,57 @@ public final class UnaryRpc {
 
     /* ------------------------------------------------------------------ */
 
+    /**
+     * 向一个"原始字节"路由 POST 二进制体（目前用于 {@code /api/session/uploadFileBinary}）。
+     *
+     * @param pathWithQuery 以 / 开头的路径（可带查询串）
+     * @param cookie        API Cookie
+     * @param data          原始字节
+     * @return 响应体原文（调用方自行解析）
+     */
+    public static String postRaw(String baseUrl, String pathWithQuery, String cookie,
+                                 byte[] data, int timeoutMs) throws IOException {
+        if (cookie == null || cookie.isEmpty()) {
+            throw new IOException("缺少 API Cookie：先走 /connect?token= 换取");
+        }
+        if (data == null) {
+            data = new byte[0];
+        }
+        String root = baseUrl;
+        while (root.endsWith("/")) {
+            root = root.substring(0, root.length() - 1);
+        }
+        String url = root + pathWithQuery;
+
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(timeoutMs);
+            conn.setReadTimeout(timeoutMs);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("content-type", "application/octet-stream");
+            conn.setRequestProperty("Cookie", cookie);
+            // 流式上传：大文件不必一次读进内存
+            conn.setFixedLengthStreamingMode(data.length);
+            OutputStream os = conn.getOutputStream();
+            os.write(data);
+            os.flush();
+            os.close();
+
+            int status = conn.getResponseCode();
+            String body = readAll(status >= 400 ? conn.getErrorStream() : conn.getInputStream());
+            if (status != 200) {
+                throw new IOException("HTTP " + status + "：" + trim(body, 300));
+            }
+            return body;
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
     private static String readAll(InputStream in) throws IOException {
         if (in == null) {
             return "";

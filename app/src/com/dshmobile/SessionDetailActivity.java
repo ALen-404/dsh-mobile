@@ -15,6 +15,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.dshmobile.protocol.Base64Lite;
 import com.dshmobile.protocol.DshClient;
 import com.dshmobile.protocol.MarkdownLite;
 import com.dshmobile.protocol.ObserveEventStream;
@@ -23,6 +24,7 @@ import com.dshmobile.protocol.SessionProjection;
 import com.dshmobile.protocol.SessionTranscript;
 import com.dshmobile.protocol.TranscriptBuilder;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -153,6 +155,14 @@ public class SessionDetailActivity extends Activity {
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         inputRow.addView(input, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button attach = new Button(this);
+        attach.setText("＋");
+        attach.setAllCaps(false);
+        attach.setOnClickListener(v -> pickAttachment());
+        inputRow.addView(attach, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         Button send = new Button(this);
         send.setText("发送");
         send.setAllCaps(false);
@@ -163,6 +173,15 @@ public class SessionDetailActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         inputLp.setMargins(dp(12), dp(4), dp(12), 0);
         root.addView(inputRow, inputLp);
+
+        // 附件状态（已就绪的附件名 / 上传中 / 失败）
+        attachmentStatus = new TextView(this);
+        attachmentStatus.setTextSize(12);
+        attachmentStatus.setAlpha(0.7f);
+        attachmentStatus.setPadding(dp(14), dp(2), dp(14), dp(2));
+        attachmentStatus.setVisibility(View.GONE);
+        root.addView(attachmentStatus, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
@@ -231,7 +250,23 @@ public class SessionDetailActivity extends Activity {
         });
     }
 
-    /** 一次加载要带出来的东西（避免用 Object[] 传参）。 */
+    /** 已就绪、等待随下一条消息发出的附件片段（JSON 片段 + 显示名）。 */
+    private final List<String> pendingParts = new ArrayList<>();
+    private final List<String> pendingPartNames = new ArrayList<>();
+    private TextView attachmentStatus;
+    private static final int REQ_ATTACH = 5101;
+    private static final long MAX_ATTACH_BYTES = 8L * 1024 * 1024;
+    /** 内联进 prompt 的图片上限（base64 会膨胀 4/3，太大不值得）。 */
+    private static final long MAX_INLINE_IMAGE_BYTES = 3L * 1024 * 1024;
+
+    /* 断线重连 */
+    private final android.os.Handler reconnectHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable reconnectRunnable;
+    private int reconnectAttempt;
+    /** true = 用户主动关闭（离开页面/手动刷新），不要自动重连。 */
+    private volatile boolean streamClosedByUser = true;
+
+    /** 一次性加载要带出来的东西（避免用 Object[] 传参）。 */
     private static final class Loaded {
         SessionProjection projection;
         List<SessionEvent> history;
@@ -243,11 +278,13 @@ public class SessionDetailActivity extends Activity {
         if (baseUrl == null || cookie == null) {
             return;
         }
+        streamClosedByUser = false;
         try {
             stream = ObserveEventStream.open(baseUrl, cookie, sessionId, new ObserveEventStream.Listener() {
                 @Override
                 public void onReady() {
                     live = true;
+                    reconnectAttempt = 0;
                     runOnUiThread(() -> status.setText(statusLineText()));
                 }
 
@@ -283,17 +320,22 @@ public class SessionDetailActivity extends Activity {
                 @Override
                 public void onEnd() {
                     live = false;
-                    runOnUiThread(() -> status.setText(statusLineText()));
+                    runOnUiThread(() -> {
+                        status.setText(statusLineText());
+                        scheduleReconnect("流已结束");
+                    });
                 }
 
                 @Override
                 public void onError(Exception error) {
                     live = false;
-                    runOnUiThread(() -> status.setText("实时连接断开：" + error.getMessage()));
+                    final String message = error == null ? "未知错误" : error.getMessage();
+                    runOnUiThread(() -> scheduleReconnect(message));
                 }
             });
         } catch (Exception e) {
-            status.setText("实时连接失败（历史仍可看）：" + e.getMessage());
+            status.setText("实时连接失败，稍后自动重连：" + e.getMessage());
+            scheduleReconnect(e.getMessage());
         }
     }
 
@@ -512,20 +554,177 @@ public class SessionDetailActivity extends Activity {
             return;
         }
 
-        // 普通消息：按 Markdown-lite 分块，代码块用等宽字体 + 横滚
+        // 普通消息：按 Markdown-lite 分块渲染（代码块 / 标题 / 引用 / 列表 / 表格 / 段落）
         for (MarkdownLite.Block block : MarkdownLite.parse(entry.text)) {
             if (block.isCode()) {
                 addCodeBlock(block);
+            } else if (block.isTable()) {
+                addTableBlock(block);
+            } else if (MarkdownLite.Block.TYPE_HEADING.equals(block.type)) {
+                addHeadingBlock(block, entry);
+            } else if (MarkdownLite.Block.TYPE_QUOTE.equals(block.type)) {
+                addQuoteBlock(block, entry);
+            } else if (block.isList()) {
+                addListBlock(block, entry);
             } else {
                 TextView body = new TextView(this);
-                body.setText(block.text);
+                body.setText(applyInline(block.text));
                 body.setTextSize(15);
                 body.setTextIsSelectable(true);
+                body.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
                 if (entry.isError()) {
                     body.setTextColor(0xFFB00020);
                 }
                 messagesBox.addView(body);
             }
+        }
+    }
+
+    /* ---- 新的块级渲染 ---- */
+
+    /** 标题：按层级放大加粗。 */
+    private void addHeadingBlock(MarkdownLite.Block block, SessionTranscript.Entry entry) {
+        TextView v = new TextView(this);
+        v.setText(applyInline(block.text));
+        int level = Math.max(1, Math.min(6, block.level));
+        v.setTextSize(new int[]{0, 22, 20, 18, 17, 16, 15}[level]);
+        v.setTypeface(Typeface.DEFAULT_BOLD);
+        v.setTextIsSelectable(true);
+        v.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+        v.setPadding(0, dp(8), 0, dp(2));
+        if (entry.isError()) {
+            v.setTextColor(0xFFB00020);
+        }
+        messagesBox.addView(v);
+    }
+
+    /** 引用：左侧竖条 + 灰字。 */
+    private void addQuoteBlock(MarkdownLite.Block block, SessionTranscript.Entry entry) {
+        TextView v = new TextView(this);
+        v.setText(applyInline(block.text));
+        v.setTextSize(14);
+        v.setAlpha(0.85f);
+        v.setTextIsSelectable(true);
+        v.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+        v.setPadding(dp(10), dp(6), dp(6), dp(6));
+        // 左侧用背景 + padding 模拟竖条
+        v.setBackgroundColor(0x0F000000);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, dp(4), 0, dp(4));
+        messagesBox.addView(v, lp);
+    }
+
+    /** 列表项：按嵌套层级缩进，前面加圆点/序号。 */
+    private void addListBlock(MarkdownLite.Block block, SessionTranscript.Entry entry) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        int depth = Math.max(1, block.level);
+        row.setPadding(dp((depth - 1) * 16), dp(2), 0, dp(2));
+
+        TextView marker = new TextView(this);
+        marker.setText(block.ordered ? "1." : "•");
+        marker.setTextSize(15);
+        marker.setPadding(0, 0, dp(6), 0);
+        row.addView(marker, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView text = new TextView(this);
+        text.setText(applyInline(block.text));
+        text.setTextSize(15);
+        text.setTextIsSelectable(true);
+        text.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+        if (entry.isError()) {
+            text.setTextColor(0xFFB00020);
+        }
+        row.addView(text, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        messagesBox.addView(row);
+    }
+
+    /** 表格：TableLayout + 横向滚动，表头加粗带底色。 */
+    private void addTableBlock(MarkdownLite.Block block) {
+        android.widget.TableLayout table = new android.widget.TableLayout(this);
+        table.setStretchAllColumns(false);
+        int columns = 0;
+        for (List<String> row : block.rows) {
+            columns = Math.max(columns, row.size());
+        }
+        for (int r = 0; r < block.rows.size(); r++) {
+            List<String> row = block.rows.get(r);
+            android.widget.TableRow tableRow = new android.widget.TableRow(this);
+            for (int c = 0; c < columns; c++) {
+                String cellText = c < row.size() ? row.get(c) : "";
+                TextView cell = new TextView(this);
+                cell.setText(applyInline(cellText));
+                cell.setTextSize(13);
+                cell.setPadding(dp(8), dp(5), dp(8), dp(5));
+                cell.setTextIsSelectable(true);
+                if (r == 0) {
+                    cell.setTypeface(Typeface.DEFAULT_BOLD);
+                    cell.setBackgroundColor(0x14000000);
+                }
+                tableRow.addView(cell);
+            }
+            table.addView(tableRow, new android.widget.TableLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+        android.widget.HorizontalScrollView scroller = new android.widget.HorizontalScrollView(this);
+        scroller.setHorizontalScrollBarEnabled(false);
+        scroller.addView(table);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, dp(6), 0, dp(6));
+        messagesBox.addView(scroller, lp);
+    }
+
+    /** 把一段 Markdown 行内语法转成带样式的文本。 */
+    private CharSequence applyInline(String text) {
+        android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+        for (MarkdownLite.Inline in : MarkdownLite.parseInline(text)) {
+            int start = sb.length();
+            sb.append(in.text);
+            int end = sb.length();
+            int flags = android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE;
+            switch (in.type) {
+                case MarkdownLite.Inline.BOLD:
+                    sb.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), start, end, flags);
+                    break;
+                case MarkdownLite.Inline.ITALIC:
+                    sb.setSpan(new android.text.style.StyleSpan(Typeface.ITALIC), start, end, flags);
+                    break;
+                case MarkdownLite.Inline.CODE:
+                    sb.setSpan(new android.text.style.TypefaceSpan("monospace"), start, end, flags);
+                    sb.setSpan(new android.text.style.BackgroundColorSpan(0x1A000000), start, end, flags);
+                    break;
+                case MarkdownLite.Inline.LINK:
+                    sb.setSpan(new android.text.style.UnderlineSpan(), start, end, flags);
+                    sb.setSpan(new android.text.style.ForegroundColorSpan(0xFF1565C0), start, end, flags);
+                    final String url = in.url;
+                    sb.setSpan(new android.text.style.ClickableSpan() {
+                        @Override
+                        public void onClick(View widget) {
+                            openExternal(url);
+                        }
+                    }, start, end, flags);
+                    break;
+                default:
+                    break;
+            }
+        }
+        return sb;
+    }
+
+    /** 打开外部链接（不在本 WebView 里导航）。 */
+    private void openExternal(String url) {
+        if (url == null || url.isEmpty()) {
+            return;
+        }
+        try {
+            Intent it = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url));
+            startActivity(it);
+        } catch (Exception e) {
+            Toast.makeText(this, "无法打开链接：" + url, Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -576,11 +775,14 @@ public class SessionDetailActivity extends Activity {
             return;
         }
         final String text = input.getText().toString().trim();
-        if (text.isEmpty()) {
+        final List<String> parts = new ArrayList<>(pendingParts);
+        if (text.isEmpty() && parts.isEmpty()) {
             return;
         }
         input.setText("");
-        pendingUserText = text;
+        pendingUserText = text.isEmpty()
+                ? ("（附件 " + pendingPartNames.size() + " 个）")
+                : text;
         pendingError = null;
         pendingScroll = true;
         renderAll();
@@ -589,7 +791,7 @@ public class SessionDetailActivity extends Activity {
             @Override
             public Void run() throws Exception {
                 DshClient.Session session = DshClient.connect(instance.tokenUrl, 8000);
-                DshClient.prompt(session, sessionId, text);
+                DshClient.prompt(session, sessionId, text, parts);
                 return null;
             }
         }, new Task.Done<Void>() {
@@ -599,6 +801,11 @@ public class SessionDetailActivity extends Activity {
                     // 发送失败：把乐观气泡撤掉，换成错误提示
                     pendingUserText = null;
                     pendingError = "发送失败：" + error;
+                } else {
+                    // 发送成功：附件已随消息发出，清空待发附件
+                    pendingParts.clear();
+                    pendingPartNames.clear();
+                    renderAttachments();
                 }
                 // 成功时保留乐观气泡，等事件流里的 user/message 到达后自动替换
                 pendingScroll = true;
@@ -608,9 +815,154 @@ public class SessionDetailActivity extends Activity {
     }
 
     /* ------------------------------------------------------------------ */
+    /* 附件                                                                */
+    /* ------------------------------------------------------------------ */
+
+    /** 选附件：图片内联成 base64，其它文件先上传拿 receiptId。 */
+    private void pickAttachment() {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        try {
+            startActivityForResult(Intent.createChooser(intent, "选择要发送的文件"), REQ_ATTACH);
+        } catch (Exception e) {
+            Toast.makeText(this, "没有可用的文件选择器", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_ATTACH) {
+            return;
+        }
+        if (resultCode != RESULT_OK || data == null) {
+            return;
+        }
+        final List<android.net.Uri> uris = new ArrayList<>();
+        android.content.ClipData clip = data.getClipData();
+        if (clip != null && clip.getItemCount() > 0) {
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                uris.add(clip.getItemAt(i).getUri());
+            }
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        if (uris.isEmpty()) {
+            return;
+        }
+        attachmentStatus.setVisibility(View.VISIBLE);
+        attachmentStatus.setText("正在准备附件…");
+        attachmentStatus.setTextColor(0xFF666666);
+
+        Task.run(this, "dsh-attach", new Task.Work<List<String[]>>() {
+            @Override
+            public List<String[]> run() throws Exception {
+                List<String[]> ready = new ArrayList<>();
+                DshClient.Session session = DshClient.connect(instance.tokenUrl, 8000);
+                for (android.net.Uri uri : uris) {
+                    PickedFile file = PickedFile.read(SessionDetailActivity.this, uri, MAX_ATTACH_BYTES);
+                    if (file.isImage() && file.isSupportedImage()
+                            && file.bytes.length <= MAX_INLINE_IMAGE_BYTES) {
+                        // 图片：直接内联 base64，省一次上传
+                        ready.add(new String[]{file.name,
+                                DshClient.imagePart(file.mimeType, Base64Lite.encode(file.bytes), file.name)});
+                    } else {
+                        // 其它文件：上传 → receiptId → 文件片段
+                        String body = DshClient.uploadFile(session, sessionId, file.name, file.bytes);
+                        String receiptId = DshClient.parseUploadReceiptId(body);
+                        if (receiptId.isEmpty()) {
+                            throw new IllegalStateException("上传没有返回 receiptId：" + file.name);
+                        }
+                        ready.add(new String[]{file.name, DshClient.filePart(receiptId)});
+                    }
+                }
+                return ready;
+            }
+        }, new Task.Done<List<String[]>>() {
+            @Override
+            public void onResult(List<String[]> ready, String error) {
+                if (error != null) {
+                    attachmentStatus.setVisibility(View.VISIBLE);
+                    attachmentStatus.setText("附件失败：" + error);
+                    attachmentStatus.setTextColor(0xFFB00020);
+                    return;
+                }
+                for (String[] item : ready) {
+                    pendingPartNames.add(item[0]);
+                    pendingParts.add(item[1]);
+                }
+                renderAttachments();
+            }
+        });
+    }
+
+    private void renderAttachments() {
+        if (attachmentStatus == null) {
+            return;
+        }
+        if (pendingParts.isEmpty()) {
+            attachmentStatus.setVisibility(View.GONE);
+            attachmentStatus.setText("");
+            return;
+        }
+        StringBuilder sb = new StringBuilder("待发送附件：");
+        for (int i = 0; i < pendingPartNames.size(); i++) {
+            if (i > 0) {
+                sb.append("、");
+            }
+            sb.append(pendingPartNames.get(i));
+        }
+        sb.append("（点「＋」可继续添加）");
+        attachmentStatus.setVisibility(View.VISIBLE);
+        attachmentStatus.setTextColor(0xFF2E7D32);
+        attachmentStatus.setText(sb.toString());
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 断线自动重连                                                        */
+    /* ------------------------------------------------------------------ */
+
+    /** 流意外断开时调度一次重连（指数退避，最长 30 秒）。 */
+    private void scheduleReconnect(String reason) {
+        if (streamClosedByUser || isFinishing()) {
+            return;
+        }
+        reconnectAttempt++;
+        long delayMs = Math.min(1000L * (1L << Math.min(reconnectAttempt - 1, 5)), 30000L);
+        final long delay = delayMs;
+        status.setText("连接断开（" + reason + "），" + (delay / 1000) + " 秒后自动重连"
+                + "（第 " + reconnectAttempt + " 次）");
+        if (reconnectRunnable != null) {
+            reconnectHandler.removeCallbacks(reconnectRunnable);
+        }
+        reconnectRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing() || streamClosedByUser) {
+                    return;
+                }
+                // load() 会重新换 token（cookie 可能已过期）、补历史、重订阅
+                load();
+            }
+        };
+        reconnectHandler.postDelayed(reconnectRunnable, delay);
+    }
+
+    private void cancelReconnect() {
+        if (reconnectRunnable != null) {
+            reconnectHandler.removeCallbacks(reconnectRunnable);
+            reconnectRunnable = null;
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
 
     private void closeStream() {
         live = false;
+        streamClosedByUser = true;
+        cancelReconnect();
         if (stream != null) {
             try {
                 stream.close();

@@ -24,7 +24,7 @@
 
 - **M1（A 模式）**：多实例增删改、继续上次、WebView 全屏 + 返回键走网页历史、401/403/404/502/530 诊断、连接预检、桌面/手机宽度切换、退出时清登录态、附件选择、下载（带 Cookie）、`window.open`、JS 弹窗、渲染进程崩溃恢复、加载进度条
 - **M2（A + B 模式）**：`/connect?token=` 换 API Cookie、原生会话列表（标题/状态/相对时间）、原生会话详情（投影：权限/目录/统计/token/上下文构成）、按 seq 增量合并的实时事件、能力分级与降级
-- **M3**：事件日志 → 对话折叠、实时追加、工具调用卡片、代码块等宽渲染（Markdown-lite）、复制全文、原生发消息（乐观渲染 + 失败提示）、新建会话
+- **M3**：事件日志 → 对话折叠、实时追加、工具调用卡片、Markdown 渲染（代码块/表格/标题/引用/列表/加粗/斜体/行内代码/链接）、复制全文、原生发消息（乐观渲染 + 失败提示）、新建会话、**原生发送附件**（图片内联 base64、其它文件先上传拿 receiptId）、**断线自动重连**（1s→30s 指数退避）
 
 ### 文档（8 份 / 54.3 KB）
 
@@ -56,6 +56,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1               # 产出 APK，
 | 上下文注入会被误记为 `user/message`，必须按 `source.kind` 过滤 | 实测：不过滤会冒出几 KB 的提示词文本 |
 | 自写 RFC6455 客户端在真实 mux 上可用 | `LiveSelfTest` 第 4 步收到帧 |
 | 端点清单：90 个 / 13 个命名空间（session 25） | `protocol/test/dsh-methods.mjs` 从产物提取 |
+| 原生附件：上传 → receiptId → prompt 的 file 片段 → 事件日志解析为 attachment | Java `LiveSelfTest` 第 6 步，连跑两次稳定 |
+| Markdown 块级/行内解析（代码块/表格/标题/引用/列表/加粗/斜体/行内代码/链接） | 21 条断言 |
 | 失败路径的形状（模型不可用时） | `assistant/attempt.stream[].chunk.reason.failure` + `turn/end.reason.error` |
 
 ### 重新验证
@@ -77,9 +79,8 @@ powershell -ExecutionPolicy Bypass -File tools/dev-instance.ps1 -Stop  # 清理
 | **全部界面**（5 个 Activity、WebView 行为、键盘/滚动/布局） | 构建机没有 adb，也没有设备/模拟器 | 按 [device-checklist.md](device-checklist.md) 在真机上走一遍 |
 | `assistant/message`（模型**成功**回复）的真实形状 | 隔离实例没有模型凭据，只能拿到失败路径 | 一次真模型调用：给隔离实例配凭据，或用已有对话实例的 token 读历史 |
 | `tool/*` 事件的真实形状 | 同上（没有成功回复就不会有工具调用） | 同上一行；当前形状来自官方 bundle 的渲染代码，属于 `[DOC]` 级 |
-| 原生模式的附件上传 | 未实现 | 需要开发 |
-| 断线重连 / 事件回放 | 未实现（断开只显示"实时未连接"） | 需要开发 |
-| Markdown 的表格/行内样式 | 刻意不做（见 [design.md](design.md)） | — |
+| 原生附件的**图片**内联路径 | 已按 schema 实现（base64 内联），但没在真机上选过图 | 真机选一张图发出去 |
+| 断线**重连期间**的历史补齐 | 重连逻辑已实现（退避 1s→30s），但只在离屏/切后台场景验证过 | 真机上关 WiFi 再开，看是否自动恢复 |
 | 多实例 Cookie 真隔离 | Android 单进程 WebView 限制，只做了「提醒 + 清理」 | 需要独立进程方案 |
 | Android 各版本差异（渲染进程回收、文件选择器实现） | 只在 API 34 编译，未在任何设备上跑 | 多机型验证 |
 
