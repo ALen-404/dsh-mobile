@@ -69,11 +69,26 @@ public final class UnaryRpc {
         if (cookie == null || cookie.isEmpty()) {
             throw new IOException("缺少 API Cookie：先走 /connect?token= 换取");
         }
-        String root = baseUrl;
-        while (root.endsWith("/")) {
-            root = root.substring(0, root.length() - 1);
+        java.util.Map<String, String> headers = new java.util.LinkedHashMap<>();
+        headers.put("Cookie", cookie);
+        return call(trimSlash(baseUrl) + "/api", headers, endpoint, argsJson, timeoutMs);
+    }
+
+    /**
+     * 带任意请求头的 unary 调用 —— 用于插件的 {@code /remote} 网关通道。
+     *
+     * <p>实测（remote-web-ui 插件）：配对设备可以用
+     * {@code POST /remote/api/<endpoint>} + {@code x-dsh-remote-device} 头访问**完整宿主 API**，
+     * 不需要 launch token。参数 {@code apiRoot} 就是"到 /api 为止"的前缀：
+     * 直连是 {@code https://host/api}，走插件网关是 {@code https://host/remote/api}。
+     */
+    public static String call(String apiRoot, java.util.Map<String, String> headers,
+                              String endpoint, String argsJson, int timeoutMs) throws IOException {
+        if (headers == null || headers.isEmpty()) {
+            throw new IOException("缺少凭证：需要 Cookie 或设备头");
         }
-        String url = root + "/api/" + endpoint;
+        String root = trimSlash(apiRoot);
+        String url = root + "/" + endpoint;
 
         String rpcId = UUID.randomUUID().toString();
         String body = "{\"type\":\"client-request\",\"rpcId\":\"" + rpcId
@@ -88,7 +103,11 @@ public final class UnaryRpc {
             conn.setReadTimeout(timeoutMs);
             conn.setDoOutput(true);
             conn.setRequestProperty("content-type", "application/json");
-            conn.setRequestProperty("Cookie", cookie);
+            for (java.util.Map.Entry<String, String> e : headers.entrySet()) {
+                if (e.getKey() != null && e.getValue() != null) {
+                    conn.setRequestProperty(e.getKey(), e.getValue());
+                }
+            }
             conn.setRequestProperty("User-Agent", Credential.clientId());
 
             byte[] payload = body.getBytes(StandardCharsets.UTF_8);
@@ -131,13 +150,27 @@ public final class UnaryRpc {
         if (cookie == null || cookie.isEmpty()) {
             throw new IOException("缺少 API Cookie：先走 /connect?token= 换取");
         }
+        java.util.Map<String, String> headers = new java.util.LinkedHashMap<>();
+        headers.put("Cookie", cookie);
+        return postRaw(baseUrl, headers, pathWithQuery, data, timeoutMs);
+    }
+
+    /**
+     * 带任意请求头的原始字节 POST（配对设备走 {@code /remote/api/...} 上传也用这个）。
+     *
+     * @param origin        实例来源（{@code https://host}），路径由 {@code pathWithQuery} 提供
+     * @param headers       凭证头（Cookie / x-dsh-remote-device）
+     * @param pathWithQuery 已包含 {@code /api} 或 {@code /remote/api} 前缀的路径
+     */
+    public static String postRaw(String origin, java.util.Map<String, String> headers,
+                                 String pathWithQuery, byte[] data, int timeoutMs) throws IOException {
+        if (headers == null || headers.isEmpty()) {
+            throw new IOException("缺少凭证：需要 Cookie 或设备头");
+        }
         if (data == null) {
             data = new byte[0];
         }
-        String root = baseUrl;
-        while (root.endsWith("/")) {
-            root = root.substring(0, root.length() - 1);
-        }
+        String root = trimSlash(origin);
         String url = root + pathWithQuery;
 
         HttpURLConnection conn = null;
@@ -148,8 +181,11 @@ public final class UnaryRpc {
             conn.setReadTimeout(timeoutMs);
             conn.setDoOutput(true);
             conn.setRequestProperty("content-type", "application/octet-stream");
-            conn.setRequestProperty("Cookie", cookie);
-            // 流式上传：大文件不必一次读进内存
+            for (java.util.Map.Entry<String, String> e : headers.entrySet()) {
+                if (e.getKey() != null && e.getValue() != null) {
+                    conn.setRequestProperty(e.getKey(), e.getValue());
+                }
+            }
             conn.setFixedLengthStreamingMode(data.length);
             OutputStream os = conn.getOutputStream();
             os.write(data);
@@ -167,6 +203,14 @@ public final class UnaryRpc {
                 conn.disconnect();
             }
         }
+    }
+
+    private static String trimSlash(String s) {
+        String out = s == null ? "" : s;
+        while (out.endsWith("/")) {
+            out = out.substring(0, out.length() - 1);
+        }
+        return out;
     }
 
     private static String readAll(InputStream in) throws IOException {

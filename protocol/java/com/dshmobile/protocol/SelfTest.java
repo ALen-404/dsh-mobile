@@ -507,6 +507,36 @@ public final class SelfTest {
             check("地址形状判定", back.get(0).hasUsableUrl() && !new InstanceRecord("x", "", "").hasUsableUrl());
         }
         check("空列表编码成 []", "[]".equals(InstanceRecord.encodeAll(new java.util.ArrayList<InstanceRecord>())));
+
+        // --- 配对设备（remote-web-ui 插件）：粘贴配对链接即可用原生能力 ---
+        check("认出配对链接", PairCookie.looksLikePairUrl(
+                "https://dsh2.earthonline.bar/pair-accept?pair=411f80c8"));
+        check("token 地址不当配对链接", !PairCookie.looksLikePairUrl(
+                "http://127.0.0.1:3080/?token=abc"));
+        check("从整段文字里提取配对链接",
+                "https://h.example.com/pair-accept?pair=abc".equals(PairCookie.extractPairUrl(
+                        "在浏览器打开 https://h.example.com/pair-accept?pair=abc 就行")));
+        check("配对链接尾巴的中文句号要剪掉",
+                "https://h.example.com/pair-accept?pair=abc".equals(PairCookie.extractPairUrl(
+                        "https://h.example.com/pair-accept?pair=abc。")));
+        check("没有配对链接返回 null", PairCookie.extractPairUrl("随便一段话") == null);
+        check("从 Cookie 头取设备 id",
+                "53e608b386ccaee5".equals(PairCookie.deviceFromCookie(
+                        "a=1; dsh_pair=53e608b386ccaee5; b=2")));
+        check("设备 cookie 为空时返回空串", PairCookie.deviceFromCookie("dsh_pair=").isEmpty());
+        check("没有设备 cookie 返回空串", PairCookie.deviceFromCookie("x=1").isEmpty());
+        check("null Cookie 头返回空串", PairCookie.deviceFromCookie(null).isEmpty());
+
+        // 配对实例：有 url + pairDevice 就算配了凭证（不需要 tokenUrl）
+        InstanceRecord paired = new InstanceRecord("公网", "https://dsh.example.com", "", "dev-123");
+        check("配对实例算有凭证", paired.hasApiCredential());
+        java.util.List<InstanceRecord> pairedBack =
+                InstanceRecord.parseAll(InstanceRecord.encodeAll(java.util.Collections.singletonList(paired)));
+        check("配对设备能持久化", pairedBack.size() == 1
+                && "dev-123".equals(pairedBack.get(0).pairDevice)
+                && pairedBack.get(0).hasApiCredential());
+        check("没有 pairDevice 的旧记录仍可解析", InstanceRecord.parseAll(
+                "[{\"name\":\"x\",\"url\":\"http://h:1\",\"tokenUrl\":\"\"}]").get(0).pairDevice.isEmpty());
         check("null 列表编码成 []", "[]".equals(InstanceRecord.encodeAll(null)));
         check("坏 JSON 返回空列表", InstanceRecord.parseAll("{not json").isEmpty());
         check("不是数组返回空列表", InstanceRecord.parseAll("{\"a\":1}").isEmpty());

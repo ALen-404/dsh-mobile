@@ -23,11 +23,23 @@ public final class InstanceRecord {
     public final String name;
     public final String url;
     public final String tokenUrl;
+    /**
+     * 配对设备 id（remote-web-ui 插件的 {@code dsh_pair} cookie 值）。
+     *
+     * <p>有它就能走 {@code /remote} 网关用完整宿主 API —— 用户只粘贴一次
+     * {@code /pair-accept?pair=…} 链接就能用原生界面，不需要 launch token。
+     */
+    public final String pairDevice;
 
     public InstanceRecord(String name, String url, String tokenUrl) {
+        this(name, url, tokenUrl, "");
+    }
+
+    public InstanceRecord(String name, String url, String tokenUrl, String pairDevice) {
         this.name = name == null ? "" : name;
         this.url = url == null ? "" : url;
         this.tokenUrl = tokenUrl == null ? "" : tokenUrl;
+        this.pairDevice = pairDevice == null ? "" : pairDevice;
     }
 
     /**
@@ -51,6 +63,9 @@ public final class InstanceRecord {
      * </ul>
      */
     public boolean hasApiCredential() {
+        if (!pairDevice.isEmpty() && hostOf(url) != null) {
+            return true;
+        }
         if (hostOf(tokenUrl) == null) {
             return false;
         }
@@ -113,7 +128,8 @@ public final class InstanceRecord {
     public String toJson() {
         return "{\"name\":" + Json.quote(name)
                 + ",\"url\":" + Json.quote(url)
-                + ",\"tokenUrl\":" + Json.quote(tokenUrl) + "}";
+                + ",\"tokenUrl\":" + Json.quote(tokenUrl)
+                + ",\"pairDevice\":" + Json.quote(pairDevice) + "}";
     }
 
     /** 把列表编码成 JSON 数组文本。 */
@@ -156,7 +172,8 @@ public final class InstanceRecord {
             String name = Json.str(item, "name", "DSH");
             String url = Json.str(item, "url", "");
             String tokenUrl = Json.str(item, "tokenUrl", "");
-            out.add(new InstanceRecord(name, url, tokenUrl));
+            String pairDevice = Json.str(item, "pairDevice", "");
+            out.add(new InstanceRecord(name, url, tokenUrl, pairDevice));
         }
         return out;
     }

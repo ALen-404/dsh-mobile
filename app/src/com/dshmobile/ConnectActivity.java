@@ -16,6 +16,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.dshmobile.protocol.DshClient;
+import com.dshmobile.protocol.PairCookie;
 import com.dshmobile.protocol.TokenUrl;
 
 /**
@@ -136,9 +137,20 @@ public class ConnectActivity extends Activity {
     /* ---------------- 动作 ---------------- */
 
     private void connectWithToken() {
-        String tokenUrl = TokenUrl.extract(tokenField.getText().toString());
+        String pasted = tokenField.getText().toString();
+        // 配对链接优先：粘贴 …/pair-accept?pair=… 就直接走配对流程，一步到位
+        String pairUrl = PairCookie.extractPairUrl(pasted);
+        if (pairUrl != null) {
+            Intent it = new Intent(this, PairingActivity.class);
+            it.putExtra(PairingActivity.EXTRA_PAIR_URL, pairUrl);
+            startActivity(it);
+            finish();
+            return;
+        }
+        String tokenUrl = TokenUrl.extract(pasted);
         if (tokenUrl == null) {
-            toast("没找到带 token 的地址，请把整行粘贴进来");
+            toast("没认出这是配对链接还是启动地址：配对链接形如 …/pair-accept?pair=…，"
+                    + "启动地址形如 …/?token=…");
             return;
         }
         final String address = baseOf(tokenUrl);

@@ -17,16 +17,29 @@ public final class DshClient {
     public static final class Session {
         public final Credential credential;
         public final String baseUrl;
-        /** /connect 换到的 Cookie 头内容。 */
+        /** /connect 换到的 Cookie 头内容（配对设备模式为空，改走设备头）。 */
         public final String cookie;
         /** mux 目的地（stream 通道用，通常相对路径 "./"）。 */
         public final String muxUrl;
+        /**
+         * 到 {@code /api} 为止的调用前缀：直连是 {@code <base>/api}，
+         * 走 remote-web-ui 插件的配对网关是 {@code <base>/remote/api}。
+         */
+        public final String apiRoot;
+        /** 每次请求要带的凭证头（Cookie / x-dsh-remote-device）。 */
+        public final java.util.Map<String, String> headers;
+        /** 配对设备的 id（token 模式为空）。 */
+        public final String deviceId;
 
-        Session(Credential credential, String baseUrl, String cookie, String muxUrl) {
+        Session(Credential credential, String baseUrl, String cookie, String muxUrl,
+                String apiRoot, java.util.Map<String, String> headers, String deviceId) {
             this.credential = credential;
             this.baseUrl = baseUrl;
             this.cookie = cookie;
             this.muxUrl = muxUrl;
+            this.apiRoot = apiRoot;
+            this.headers = headers;
+            this.deviceId = deviceId == null ? "" : deviceId;
         }
     }
 
@@ -47,12 +60,54 @@ public final class DshClient {
         if (!r.ok) {
             throw new IOException("换取 API Cookie 失败：" + r.advice);
         }
-        return new Session(cred, cred.baseUrl, r.cookie, r.muxUrl);
+        java.util.Map<String, String> headers = new java.util.LinkedHashMap<>();
+        headers.put("Cookie", r.cookie);
+        return new Session(cred, cred.baseUrl, r.cookie, r.muxUrl,
+                trimSlash(cred.baseUrl) + "/api", headers, "");
     }
+
+    /**
+     * 用<b>配对设备</b>建立会话（remote-web-ui 插件，粘贴 /pair-accept 链接即可）。
+     *
+     * <p>实测结论（读插件源码 + 协议约定）：配对后的手机拿到的是设备凭据，不是浏览器
+     * auth cookie；插件的 {@code /remote} 网关把宿主 API 原样代理出来 ——
+     * unary 走 {@code POST /remote/api/<ns/method>}（带 {@code x-dsh-remote-device} 头），
+     * mux 走 {@code wss://host/remote/api/remote.mux?device=<id>}。
+     * 配对设备是"完全控制"凭据（只有配对/自更新/插件安装留在本机）。
+     *
+     * @param origin   实例来源，如 {@code https://dsh.example.com}
+     * @param deviceId 配对 cookie（默认名 {@code dsh_pair}）的值
+     */
+    public static Session connectWithDevice(String origin, String deviceId) throws IOException {
+        if (origin == null || origin.isEmpty()) {
+            throw new IOException("缺少实例地址");
+        }
+        if (deviceId == null || deviceId.isEmpty()) {
+            throw new IOException("缺少配对设备 id（先打开 /pair-accept 链接完成配对）");
+        }
+        String base = trimSlash(origin);
+        java.util.Map<String, String> headers = new java.util.LinkedHashMap<>();
+        headers.put("Cookie", DEVICE_COOKIE_NAME + "=" + deviceId);
+        headers.put("x-dsh-remote-device", deviceId);
+        String mux = base.replaceFirst("^http", "ws") + "/remote/api/remote.mux?device="
+                + urlEncode(deviceId);
+        return new Session(null, base, "", mux, base + "/remote/api", headers, deviceId);
+    }
+
+    /** 配对 cookie 的默认名（插件配置可改，默认值见插件 index.js）。 */
+    public static final String DEVICE_COOKIE_NAME = "dsh_pair";
 
     /** 调一个 unary 方法，返回响应体原文。 */
     public static String call(Session session, String endpoint, String argsJson) throws IOException {
-        return UnaryRpc.call(session.baseUrl, session.cookie, endpoint, argsJson, 15000);
+        return UnaryRpc.call(session.apiRoot, session.headers, endpoint, argsJson, 15000);
+    }
+
+    private static String trimSlash(String s) {
+        String out = s == null ? "" : s;
+        while (out.endsWith("/")) {
+            out = out.substring(0, out.length() - 1);
+        }
+        return out;
     }
 
     /** 列出会话（unary）。 */
@@ -159,12 +214,17 @@ public final class DshClient {
      */
     public static String uploadFile(Session session, String sessionId, String name, byte[] data)
             throws IOException {
-        StringBuilder query = new StringBuilder("/api/session/uploadFileBinary?sessionId=")
+        // 前缀跟着凭证类型走：直连是 /api，配对设备是 /remote/api
+        String prefix = session.apiRoot.endsWith("/api")
+                ? session.apiRoot.substring(0, session.apiRoot.length() - "/api".length())
+                : session.baseUrl;
+        StringBuilder query = new StringBuilder("/session/uploadFileBinary?sessionId=")
                 .append(urlEncode(sessionId));
         if (name != null && !name.isEmpty()) {
             query.append("&name=").append(urlEncode(name));
         }
-        return UnaryRpc.postRaw(session.baseUrl, query.toString(), session.cookie, data, 60000);
+        String apiPath = session.apiRoot.substring(trimSlash(prefix).length()) + query;
+        return UnaryRpc.postRaw(prefix, session.headers, apiPath, data, 60000);
     }
 
     /** 从上传响应里取 receiptId；取不到返回空串。 */

@@ -411,7 +411,7 @@ public class ChatActivity extends Activity {
         Task.run(this, "dsh-sessions", new Task.Work<List<SessionSummary>>() {
             @Override
             public List<SessionSummary> run() throws Exception {
-                DshClient.Session s = DshClient.connect(instance.tokenUrl, 8000);
+                DshClient.Session s = openClient();
                 return SessionSummary.parseResponse(DshClient.listSessions(s));
             }
         }, new Task.Done<List<SessionSummary>>() {
@@ -497,9 +497,8 @@ public class ChatActivity extends Activity {
             @Override
             public Loaded run() throws Exception {
                 Loaded l = new Loaded();
-                DshClient.Session s = DshClient.connect(instance.tokenUrl, 8000);
-                l.baseUrl = s.baseUrl;
-                l.cookie = s.cookie;
+                DshClient.Session s = openClient();
+                l.session = s;
                 l.projection = SessionProjection.parse(DshClient.projections(s, id), id);
                 l.history = SessionEvent.parsePage(DshClient.page(s, id));
                 return l;
@@ -521,7 +520,7 @@ public class ChatActivity extends Activity {
                 headerTitle.setText(sessionTitle);
                 renderAll();
                 renderSessionList();
-                startStream(l.baseUrl, l.cookie);
+                startStream(l.session);
             }
         });
     }
@@ -529,8 +528,20 @@ public class ChatActivity extends Activity {
     private static final class Loaded {
         SessionProjection projection;
         List<SessionEvent> history;
-        String baseUrl;
-        String cookie;
+        DshClient.Session session;
+    }
+
+    /**
+     * 按实例的凭证类型开一个 API 会话。
+     *
+     * <p>两种凭证：launch token（直连 {@code /api}）或配对设备（走插件网关 {@code /remote/api}）。
+     * 配对设备是"粘贴一次配对链接就能用原生界面"的那条路。
+     */
+    private DshClient.Session openClient() throws java.io.IOException {
+        if (instance.isPaired()) {
+            return DshClient.connectWithDevice(instance.url, instance.pairDevice);
+        }
+        return DshClient.connect(instance.tokenUrl, 8000);
     }
 
     private void createSession() {
@@ -539,7 +550,7 @@ public class ChatActivity extends Activity {
         Task.run(this, "dsh-create", new Task.Work<String>() {
             @Override
             public String run() throws Exception {
-                DshClient.Session s = DshClient.connect(instance.tokenUrl, 8000);
+                DshClient.Session s = openClient();
                 return DshClient.parseCreatedSessionId(DshClient.createSession(s));
             }
         }, new Task.Done<String>() {
@@ -928,7 +939,7 @@ public class ChatActivity extends Activity {
         Task.run(this, "dsh-send", new Task.Work<Void>() {
             @Override
             public Void run() throws Exception {
-                DshClient.Session s = DshClient.connect(instance.tokenUrl, 8000);
+                DshClient.Session s = openClient();
                 DshClient.prompt(s, sessionId, text, parts);
                 return null;
             }
@@ -984,7 +995,7 @@ public class ChatActivity extends Activity {
             @Override
             public List<String[]> run() throws Exception {
                 List<String[]> out = new ArrayList<>();
-                DshClient.Session s = DshClient.connect(instance.tokenUrl, 8000);
+                DshClient.Session s = openClient();
                 for (Uri uri : uris) {
                     PickedFile f = PickedFile.read(ChatActivity.this, uri, MAX_ATTACH_BYTES);
                     if (f.isImage() && f.isSupportedImage() && f.bytes.length <= MAX_INLINE_IMAGE_BYTES) {
@@ -1040,13 +1051,23 @@ public class ChatActivity extends Activity {
     /* 实时流 + 重连                                                       */
     /* ================================================================== */
 
-    private void startStream(String baseUrl, String cookie) {
-        if (baseUrl == null || cookie == null || sessionId == null) {
+    /** 按凭证类型选事件流入口：配对设备走插件的 {@code /remote/api/remote.mux}。 */
+    private ObserveEventStream openStream(DshClient.Session s, String sid,
+                                          ObserveEventStream.Listener listener)
+            throws java.io.IOException {
+        if (s.deviceId != null && !s.deviceId.isEmpty()) {
+            return ObserveEventStream.openDevice(s, sid, listener);
+        }
+        return ObserveEventStream.open(s.baseUrl, s.cookie, sid, listener);
+    }
+
+    private void startStream(DshClient.Session apiSession) {
+        if (apiSession == null || sessionId == null) {
             return;
         }
         streamClosedByUser = false;
         try {
-            stream = ObserveEventStream.open(baseUrl, cookie, sessionId, new ObserveEventStream.Listener() {
+            stream = openStream(apiSession, sessionId, new ObserveEventStream.Listener() {
                 @Override
                 public void onReady() {
                     live = true;

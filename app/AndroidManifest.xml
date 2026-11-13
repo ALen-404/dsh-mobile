@@ -34,7 +34,14 @@
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- 实例管理 / 设置 -->
+'        <!-- 配对页：粘贴 /pair-accept 链接后走这里 -->
+        <activity
+            android:name=".PairingActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 实例管理 / 设置 -->'
         <activity
             android:name=".MainActivity"
             android:exported="false"

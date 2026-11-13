@@ -386,3 +386,56 @@ body: 原始字节
 - `session/list` 的参数是 `{_request:{}}`（不是 `{request:{}}`），
   而 `session/page`/`prompt`/`projections` 用 `{request:{…}}` —— 混用会得到
   `gateway/arguments-invalid`。
+
+## 13. 配对设备通道（remote-web-ui 插件，2026-11-13 实测）
+
+这是**不需要 launch token** 就能用完整宿主 API 的一条路 —— 用户只粘贴一次配对链接。
+
+### 13.1 流程
+
+```text
+桌面端点「显示二维码」 → POST /api/pair/issue（仅 loopback）
+  → {"url":"https://host/pair-accept?pair=<一次性 token>", "expiresAt":…}
+
+手机打开该链接（只能打开一次，token 单次消费）
+  → 303 Location: /pair-app?grant=<短期 grant>
+  → Set-Cookie: dsh_pair=<deviceId>; Path=/; HttpOnly; SameSite=Lax; Max-Age=1年
+```
+
+- cookie 名默认 `dsh_pair`（插件配置可改），**值就是 deviceId**（不带签名）
+- `/pair-app` 返回的官方页面会注入脚本：把 deviceId 放进 sessionStorage 的 `dsh-remote-device`，
+  置 `window[REMOTE_HOST_GRANT_GLOBAL]=true`，然后 replaceState 到 `/`
+
+### 13.2 配对设备怎么调 API（关键）
+
+配对设备**没有**浏览器 auth cookie，直连 `/api/*` 会 401。必须走插件的网关前缀 `/remote`：
+
+| 用途 | 请求 |
+|---|---|
+| unary | `POST https://host/remote/api/<ns/method>` |
+| stream | `wss://host/remote/api/remote.mux?device=<deviceId>` |
+| 上传附件 | `POST https://host/remote/api/session/uploadFileBinary?sessionId=&name=` |
+
+凭证两种都认：`Cookie: dsh_pair=<deviceId>` 或 `x-dsh-remote-device: <deviceId>`
+（实测只带设备头也 200）。WS 握手带不了自定义头，所以 deviceId 走 query。
+
+权限：配对设备是**完全控制**凭据（会话/聊天/设置/凭据/预设都能用），只有三类留在本机：
+`/api/pair`、`/api/update`、`/api/plugin-manager`。
+
+### 13.3 实测记录（隔离实例）
+
+```text
+POST /api/pair/issue            → 200 {"url":"https://host/pair-accept?pair=…"}
+GET  /pair-accept?pair=…        → 303 + Set-Cookie: dsh_pair=53e608b3…
+POST /remote/api/session/list   → 200 {"ok":true,"value":{"items":[]}}   （cookie + 设备头）
+POST /remote/api/session/list   → 200 （只带设备头）
+POST /api/session/list          → 401 unauthorized （对照组，符合预期）
+WS   /remote/api/remote.mux?device=… → 打开成功，收到 {"type":"item","value":{"type":"ready"}}
+```
+
+### 13.4 坑
+
+- `pair` token **一次性**：拿它做试探就废了，用户得重新出二维码
+- 隔离实例副本里的 `publicBaseUrl` 会指向真实域名，`/api/pair/issue` 生成的 URL 因此带公网域名；
+  本机测试要用 `http://127.0.0.1:<port>/pair-accept?pair=<token>` 直接打
+- `/pair-app` 的 grant 也是一次性的，别缓存该 URL

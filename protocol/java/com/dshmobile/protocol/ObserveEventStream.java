@@ -48,12 +48,31 @@ public final class ObserveEventStream {
     public static ObserveEventStream open(String baseUrl, String cookie, String sessionId,
                                           Listener listener) throws IOException {
         String wsUrl = toWsUrl(baseUrl) + "/api/remote.mux";
+        return open(wsUrl, Collections.singletonMap("Cookie", cookie), sessionId, listener);
+    }
+
+    /**
+     * 用<b>配对设备</b>的 mux 地址与凭证头订阅事件流（走 remote-web-ui 插件的
+     * {@code /remote} 网关：{@code wss://host/remote/api/remote.mux?device=<id>}）。
+     */
+    public static ObserveEventStream openDevice(DshClient.Session session, String sessionId,
+                                                Listener listener) throws IOException {
+        if (session == null || session.muxUrl == null || session.muxUrl.isEmpty()) {
+            throw new IOException("缺少 mux 地址");
+        }
+        return open(session.muxUrl, session.headers, sessionId, listener);
+    }
+
+    /** 底层：给定完整 mux 地址与请求头去订阅。 */
+    public static ObserveEventStream open(String wsUrl,
+                                          java.util.Map<String, String> headers,
+                                          String sessionId, Listener listener) throws IOException {
         // 匿名回调需要引用到实例（用于关闭连接），用 holder 过渡一下
         final ObserveEventStream[] holder = new ObserveEventStream[1];
 
         WebSocketClient client = WebSocketClient.connect(
                 URI.create(wsUrl),
-                Collections.singletonMap("Cookie", cookie),
+                headers,
                 new WebSocketClient.Listener() {
                     @Override
                     public void onOpen(WebSocketClient c) {
