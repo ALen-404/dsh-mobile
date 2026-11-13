@@ -25,6 +25,8 @@ public final class SessionProjection {
     public final String agentPreset;
     public final String workingDirectory;
     public final String permission;
+    /** 当前/上次使用的模型名（`modelSelection.lastUsed.model`，退回 `next.model`）。 */
+    public final String modelName;
     /** 投影的序号水位。 */
     public final long asOfSeq;
 
@@ -48,7 +50,8 @@ public final class SessionProjection {
     public final boolean hasGoal;
 
     SessionProjection(String sessionId, String title, String agentPreset, String workingDirectory,
-                      String permission, long asOfSeq, long turns, long steps, long llmMs, long toolMs,
+                      String permission, String modelName, long asOfSeq, long turns, long steps,
+                      long llmMs, long toolMs,
                       long ttftMs, long uncachedInputTokens, long outputTokens, long cacheReadTokens,
                       long cacheWriteTokens, long systemTokens, long toolsTokens, long messageTokens,
                       int turnOutlineCount, boolean hasGoal) {
@@ -57,6 +60,7 @@ public final class SessionProjection {
         this.agentPreset = agentPreset;
         this.workingDirectory = workingDirectory;
         this.permission = permission;
+        this.modelName = modelName == null ? "" : modelName;
         this.asOfSeq = asOfSeq;
         this.turns = turns;
         this.steps = steps;
@@ -141,6 +145,12 @@ public final class SessionProjection {
             Object usage = Json.get(values, "tokenUsage");
             Object breakdown = Json.get(values, "contextBreakdown");
             Object permissions = Json.get(values, "permissions");
+            // 模型：优先 lastUsed，其次 next（新会话两者都可能是 null）
+            Object modelSelection = Json.get(values, "modelSelection");
+            String modelName = Json.str(Json.get(modelSelection, "lastUsed"), "model", "");
+            if (modelName.isEmpty()) {
+                modelName = Json.str(Json.get(modelSelection, "next"), "model", "");
+            }
 
             int outline = Json.list(values, "turnOutline").size();
             Object goal = Json.get(values, "goal");
@@ -151,6 +161,7 @@ public final class SessionProjection {
                     Json.str(values, "agentPreset", ""),
                     Json.str(values, "workingDirectory", ""),
                     permissions == null ? "" : Json.str(permissions, "currentValue", ""),
+                    modelName,
                     Json.num(Json.path(root, "result", "value"), "asOfSeq", 0L),
                     Json.num(stats, "turns", 0L),
                     Json.num(stats, "steps", 0L),

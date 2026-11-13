@@ -20,6 +20,7 @@ public final class InstanceStore {
     private static final String KEY_INSTANCES = "instances";
     private static final String KEY_LAST_OPENED_URL = "last_opened_url";
     private static final String KEY_HOST_OWNER_PREFIX = "host_owner:";
+    private static final String KEY_LAST_SESSION = "last_session";
 
     private final SharedPreferences prefs;
 
@@ -119,5 +120,15 @@ public final class InstanceStore {
         }
         String owner = prefs.getString(KEY_HOST_OWNER_PREFIX + host, "");
         return owner == null ? "" : owner;
+    }
+
+    /** 记住上次打开的会话（下次启动直接进它）。 */
+    public void setLastSessionId(String sessionId) {
+        prefs.edit().putString(KEY_LAST_SESSION, sessionId == null ? "" : sessionId).apply();
+    }
+
+    public String getLastSessionId() {
+        String id = prefs.getString(KEY_LAST_SESSION, "");
+        return id == null ? "" : id;
     }
 }

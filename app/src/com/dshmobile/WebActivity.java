@@ -36,6 +36,7 @@ import java.util.List;
 
 import com.dshmobile.protocol.Diagnostics;
 import com.dshmobile.protocol.FileName;
+import com.dshmobile.protocol.TokenUrl;
 
 /**
  * 单个实例的浏览界面：全屏 WebView + 极简顶栏 + 失败诊断页。
@@ -505,6 +506,7 @@ public class WebActivity extends Activity {
         menu.getMenu().add(0, 1, 0, desktopWidth ? "切换为手机宽度" : "切换为桌面宽度");
         menu.getMenu().add(0, 2, 1, "复制地址");
         menu.getMenu().add(0, 3, 2, "清除本机登录状态");
+        menu.getMenu().add(0, 4, 3, "用启动地址登录…");
         menu.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1:
@@ -555,6 +557,18 @@ public class WebActivity extends Activity {
             }
         });
         errorPanel.addView(retry);
+
+        // 401/403 时的真正出口：用启动地址登录（DSH 只服务带 token 的地址）
+        Button tokenLogin = new Button(this);
+        tokenLogin.setText("用启动地址登录");
+        tokenLogin.setAllCaps(false);
+        tokenLogin.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                promptTokenLogin();
+            }
+        });
+        errorPanel.addView(tokenLogin);
 
         Button back = new Button(this);
         back.setText("返回实例列表");
@@ -615,6 +629,46 @@ public class WebActivity extends Activity {
         } else {
             web.loadUrl(instance.url);
         }
+    }
+
+    /**
+     * 让用户粘贴 `dsh` 输出里的那一行，解析出启动地址后直接登录。
+     *
+     * <p>存在的原因：App 里打开 DSH 地址必然是 401（官方 UI 需要登录态），
+     * 而浏览器里"已经登录"是因为有配对 Cookie。以前这个 401 是个死胡同 ——
+     * 报错页只有"重试/返回"，用户不知道该干什么。现在这里有出口。
+     */
+    private void promptTokenLogin() {
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        input.setHint("dsh web: http://192.168.1.5:3080/?token=…");
+        input.setMinLines(2);
+
+        new AlertDialog.Builder(this)
+                .setTitle("用启动地址登录")
+                .setMessage("在跑 DSH 的电脑上启动一次，终端会打印类似这样的一行：\n\n"
+                        + "dsh web: http://127.0.0.1:3080/?token=xxxx\n\n"
+                        + "把**整行**复制粘贴到下面（App 会自动提取地址）。\n\n"
+                        + "找不到这行也没关系：桌面版 DSH 默认不显示它，可以用命令行启动 DSH。")
+                .setView(input)
+                .setPositiveButton("登录", (dialog, which) -> {
+                    String tokenUrl = TokenUrl.extract(input.getText().toString());
+                    if (tokenUrl == null) {
+                        toast("没找到带 token 的地址，请粘贴完整那一行");
+                        return;
+                    }
+                    // 记到实例上：下次直接用它，同时解锁原生能力
+                    instance.tokenUrl = tokenUrl;
+                    int idx = store.indexOfUrl(instance.url);
+                    if (idx >= 0) {
+                        store.update(idx, instance);
+                    }
+                    hideError();
+                    toast("已保存启动地址，正在登录…");
+                    web.loadUrl(tokenUrl);
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private void showError(int status, String url) {

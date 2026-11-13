@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.dshmobile"
     android:versionCode="1"
-    android:versionName="0.1.0">
+    android:versionName="0.3.0">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -10,44 +10,61 @@
     <application
         android:label="DSH"
         android:icon="@drawable/ic_launcher"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
 
+        <!-- 主界面：DSH 复刻版（抽屉 + 对话 + 输入区） -->
         <activity
-            android:name=".MainActivity"
+            android:name=".ChatActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
-            android:label="DSH">
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
+        <!-- 首次启动：连接页 -->
+        <activity
+            android:name=".ConnectActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 实例管理 / 设置 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:label="实例与设置" />
+
+        <!-- 官方 Web UI（插件页、需要网页的功能都走这里） -->
         <activity
             android:name=".WebActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".SessionsActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:label="会话列表" />
 
         <activity
             android:name=".SessionDetailActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:label="会话详情"
             android:windowSoftInputMode="adjustResize" />
+
         <activity
             android:name=".HelpActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
             android:label="关于" />
     </application>
 </manifest>

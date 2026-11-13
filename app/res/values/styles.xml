@@ -1,9 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="@android:style/Theme.Material.Light">
-        <item name="android:colorPrimary">#3B5BFE</item>
-        <item name="android:colorAccent">#3B5BFE</item>
-        <item name="android:windowBackground">#FAFAFA</item>
+    <!-- DSH 复刻版：统一深色（配色见 UiKit，取自 DSH 自己的设计 token） -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">#3B82F6</item>
+        <item name="android:colorAccent">#3B82F6</item>
+        <item name="android:windowBackground">#16171A</item>
+        <item name="android:statusBarColor">#1B1D21</item>
+        <item name="android:navigationBarColor">#1B1D21</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:textColorPrimary">#E9ECF2</item>
+        <item name="android:textColorSecondary">#ADB2B8</item>
+        <item name="android:textColorHint">#81858C</item>
+        <item name="android:colorBackground">#16171A</item>
     </style>
 
     <style name="AppTheme.NoActionBar" parent="@style/AppTheme">

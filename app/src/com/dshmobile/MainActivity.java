@@ -218,7 +218,7 @@ public class MainActivity extends Activity {
         final boolean hasApi = inst.hasApiCredential();
         // 没有 API 凭证时也留一个入口说明"原生能力怎么开"，否则用户只会看到入口消失了。
         final String[] items = hasApi
-                ? new String[]{"打开", "原生会话列表", "测试连接", "验证 API 凭证", "编辑", "删除"}
+                ? new String[]{"打开", "进入 DSH 界面", "测试连接", "验证 API 凭证", "编辑", "删除"}
                 : new String[]{"打开", "测试连接", "原生能力怎么开？", "编辑", "删除"};
 
         new AlertDialog.Builder(this)
@@ -227,7 +227,7 @@ public class MainActivity extends Activity {
                     String action = items[which];
                     if ("打开".equals(action)) {
                         openInstance(position);
-                    } else if ("原生会话列表".equals(action)) {
+                    } else if ("进入 DSH 界面".equals(action)) {
                         openSessions(position);
                     } else if ("测试连接".equals(action)) {
                         testConnection(inst);
@@ -248,7 +248,7 @@ public class MainActivity extends Activity {
 
     /** 原生会话列表（B 模式）。能力由凭证决定，没有 token 时不出现在菜单里。 */
     private void openSessions(int position) {
-        Intent it = new Intent(this, SessionsActivity.class);
+        Intent it = new Intent(this, ChatActivity.class);
         it.putExtra(WebActivity.EXTRA_INDEX, position);
         startActivity(it);
     }

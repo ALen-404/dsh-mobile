@@ -43,7 +43,7 @@ $files = Get-ChildItem $srcDir -Filter *.java
 #   HelpActivity / MainActivity / SessionsActivity: no WebView, no stream, no
 #   socket; their background work goes through Task.run(owner, ...) which skips
 #   the callback once the Activity is finishing/destroyed.
-$noDestroyAllowed = @('HelpActivity.java', 'MainActivity.java', 'SessionsActivity.java')
+$noDestroyAllowed = @('HelpActivity.java', 'MainActivity.java', 'SessionsActivity.java', 'ConnectActivity.java')
 $bad = @()
 foreach ($f in $files) {
     if ($f.Name -notlike '*Activity.java') { continue }

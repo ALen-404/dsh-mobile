@@ -126,6 +126,20 @@ public final class SelfTest {
         check("投影坏响应返回 null", SessionProjection.parse("{bad", "s") == null);
         check("投影空响应返回 null", SessionProjection.parse("", "s") == null);
 
+        // --- 模型名（composer 上的 chip 用它）---
+        String withModel = "{\"result\":{\"ok\":true,\"value\":{\"asOfSeq\":1,\"values\":{"
+                + "\"modelSelection\":{\"lastUsed\":{\"provider\":\"p\",\"model\":\"deepseek-v4.1-flash\"},"
+                + "\"next\":null},\"turnOutline\":[]}}}}";
+        SessionProjection pm = SessionProjection.parse(withModel, "s");
+        check("取 lastUsed 的模型名", pm != null && "deepseek-v4.1-flash".equals(pm.modelName));
+        String nextOnly = "{\"result\":{\"ok\":true,\"value\":{\"asOfSeq\":1,\"values\":{"
+                + "\"modelSelection\":{\"lastUsed\":null,\"next\":{\"provider\":\"p\",\"model\":\"kimi-k3\"}},"
+                + "\"turnOutline\":[]}}}}";
+        check("lastUsed 为空时退回 next", "kimi-k3".equals(SessionProjection.parse(nextOnly, "s").modelName));
+        String noModel = "{\"result\":{\"ok\":true,\"value\":{\"asOfSeq\":1,\"values\":{"
+                + "\"modelSelection\":{\"lastUsed\":null,\"next\":null},\"turnOutline\":[]}}}}";
+        check("都没有模型名时为空串", "".equals(SessionProjection.parse(noModel, "s").modelName));
+
         // --- 会话 ID 前缀处理（DSH 的 id 形如 session-<uuid>）---
         String noTitle = "{\"result\":{\"ok\":true,\"value\":{\"kind\":\"sequenced\",\"asOfSeq\":1,"
                 + "\"values\":{\"title\":null,\"turnOutline\":[]}}}}";
@@ -568,6 +582,28 @@ public final class SelfTest {
         // --- 查询参数编码 ---
         check("urlEncode 保留安全字符", "abc-._~123".equals(DshClient.urlEncode("abc-._~123")));
         check("urlEncode 编码空格与中文", "a%20b%20%E4%B8%AD".equals(DshClient.urlEncode("a b 中")));
+
+        // --- 粘贴容错：从终端输出里提取启动地址 ---
+        check("从 dsh 输出行提取",
+                "http://127.0.0.1:3080/?token=abc123".equals(
+                        TokenUrl.extract("dsh web: http://127.0.0.1:3080/?token=abc123")));
+        check("纯地址直接提取",
+                "http://192.168.1.5:3080/?token=xyz".equals(
+                        TokenUrl.extract("http://192.168.1.5:3080/?token=xyz")));
+        check("带引号也能提取",
+                "https://dsh.example.com/?token=abc".equals(
+                        TokenUrl.extract("  \"https://dsh.example.com/?token=abc\"  ")));
+        check("带额外参数保留完整",
+                "http://h:1/?token=a&interactions=none".equals(
+                        TokenUrl.extract("http://h:1/?token=a&interactions=none")));
+        check("token 为空不算", TokenUrl.extract("http://h:1/?token=") == null);
+        check("没有 token 不算", TokenUrl.extract("http://h:1/") == null);
+        check("没有地址返回 null", TokenUrl.extract("随便一段话") == null);
+        check("null 返回 null", TokenUrl.extract(null) == null);
+        check("token 打码", TokenUrl.mask("http://h:1/?token=abcdefghijkl")
+                .contains("abcd\u2026kl")
+                || TokenUrl.mask("http://h:1/?token=abcdefghijkl").contains("abcd…kl"));
+        check("打码后仍保留主机", TokenUrl.mask("http://h:1/?token=abcdefghijkl").startsWith("http://h:1/?token="));
 
         System.out.println();
         System.out.println("通过 " + passed + " 项，失败 " + failed + " 项");
