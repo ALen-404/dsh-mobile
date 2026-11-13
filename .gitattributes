@@ -1,0 +1,12 @@
+# 统一换行符，避免 Windows / macOS / CI 之间互相改动整份文件
+* text=auto
+
+# Windows 脚本用 CRLF（PowerShell 5.1 两者都能跑，但用 CRLF 更符合 Windows 习惯）
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制
+*.png binary
+*.keystore binary
+*.apk binary

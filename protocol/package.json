@@ -1,0 +1,16 @@
+{
+  "name": "dsh-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH 通信协议层（实验性）：预检 / launch token 换 API Cookie / mux WebSocket",
+  "main": "dsh-protocol.mjs",
+  "scripts": {
+    "probe": "node probe.mjs",
+    "probe:local": "node probe.mjs --base http://127.0.0.1:3080"
+  },
+  "optionalDependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "Apache-2.0"
+}

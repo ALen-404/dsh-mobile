@@ -1,0 +1,27 @@
+# 构建产物
+build/
+dist/
+
+# 工具链（体积大，不入库；用 toolchain/fetch-toolchain.ps1 重新获取）
+toolchain/jdk/
+toolchain/sdk/
+toolchain/dl/
+toolchain/ct-tmp/
+toolchain/pf-tmp/
+toolchain/bt-tmp/
+toolchain/debug.keystore
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 系统
+Thumbs.db
+.DS_Store
+
+# 依赖（可选 ws；用 npm i 重新安装）
+node_modules/
+
+# 日志
+*.log
