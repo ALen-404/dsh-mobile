@@ -15,7 +15,12 @@
 
 param(
     [switch]$Release,
-    [string]$OutName = ""
+    [string]$OutName = "",
+    [string]$JdkPath = "",
+    [string]$SdkPath = "",
+    # Override the version stamped into the APK (CI passes the tag, e.g. 0.2.0).
+    [string]$VersionName = "",
+    [int]$VersionCode = 0
 )
 
 # Continue, not Stop: native tools (keytool/javac) write informational text to
@@ -33,10 +38,53 @@ trap {
 
 $root = $PSScriptRoot
 $toolchain = Join-Path $root 'toolchain'
-$jdk = Join-Path $toolchain 'jdk'
-$sdk = Join-Path $toolchain 'sdk'
-$bt = Join-Path $sdk 'build-tools\34.0.0'
-$androidJar = Join-Path $sdk 'platforms\android-34\android.jar'
+
+# Resolve JDK: -JdkPath > toolchain/jdk > $env:JAVA_HOME > javac on PATH.
+# CI has no toolchain/jdk, so the fallbacks are what make this script CI-friendly.
+$jdk = if ($JdkPath) { $JdkPath } else { Join-Path $toolchain 'jdk' }
+if (-not (Test-Path (Join-Path $jdk 'bin\javac.exe'))) {
+    if ($env:JAVA_HOME -and (Test-Path (Join-Path $env:JAVA_HOME 'bin\javac.exe'))) {
+        $jdk = $env:JAVA_HOME
+    } else {
+        $onPath = Get-Command javac.exe -ErrorAction SilentlyContinue
+        if ($onPath) { $jdk = Split-Path (Split-Path $onPath.Source -Parent) -Parent }
+    }
+}
+
+# Resolve Android SDK: -SdkPath > toolchain/sdk > ANDROID_SDK_ROOT > ANDROID_HOME.
+$sdk = if ($SdkPath) { $SdkPath }
+       elseif (Test-Path (Join-Path $toolchain 'sdk')) { Join-Path $toolchain 'sdk' }
+       elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT }
+       elseif ($env:ANDROID_HOME) { $env:ANDROID_HOME }
+       else { Join-Path $toolchain 'sdk' }
+
+# Pick the highest available build-tools / platform (CI images differ from this repo's pinned 34.0.0).
+# Directory names look like "34.0.0" (build-tools) or "android-34" (platforms),
+# so match a trailing numeric version instead of the whole name.
+function NewestDir($parent, $what) {
+    if (-not (Test-Path $parent)) { throw "missing $what : $parent  (run toolchain/fetch-toolchain.ps1 first)" }
+    $candidates = Get-ChildItem $parent -Directory | ForEach-Object {
+        $m = [regex]::Match($_.Name, '(\d+(?:\.\d+)*)$')
+        if ($m.Success) {
+            # System.Version needs >= 2 parts ("34" fails), so build a numeric sort key instead
+            $parts = $m.Groups[1].Value.Split('.')
+            $major = [int]$parts[0]
+            $minor = if ($parts.Count -gt 1) { [int]$parts[1] } else { 0 }
+            $patch = if ($parts.Count -gt 2) { [int]$parts[2] } else { 0 }
+            [pscustomobject]@{
+                Path = $_.FullName
+                Key = ([long]$major * 1000000) + ([long]$minor * 1000) + [long]$patch
+            }
+        }
+    }
+    $best = $candidates | Sort-Object Key -Descending | Select-Object -First 1
+    if (-not $best) { throw "no versioned $what under $parent" }
+    Write-Host ("      $what : " + $best.Path)
+    return $best.Path
+}
+$bt = NewestDir (Join-Path $sdk 'build-tools') 'build-tools'
+$platform = NewestDir (Join-Path $sdk 'platforms') 'Android platform'
+$androidJar = Join-Path $platform 'android.jar'
 
 $app = Join-Path $root 'app'
 $res = Join-Path $app 'res'
@@ -86,7 +134,26 @@ if ($LASTEXITCODE -ne 0) { throw "aapt2 compile failed" }
 # --- 2. link resources + generate R.java ---------------------------------
 Write-Host "[2/7] aapt2 link"
 $unsigned = Join-Path $build 'app-unsigned.apk'
-& $aapt2 link -o $unsigned -I $androidJar --manifest $manifest `
+# aapt2 link has NO --version-code/--version-name flags (that was aapt v1), so a
+# version override has to be patched into a COPY of the manifest.
+$manifestToUse = $manifest
+if ($VersionName -or $VersionCode -gt 0) {
+    $manifestToUse = Join-Path $build 'AndroidManifest.xml'
+    $xml = Get-Content $manifest -Raw -Encoding UTF8
+    if ($VersionName) {
+        $nameValue = 'android:versionName="' + $VersionName + '"'
+        $xml = $xml -replace 'android:versionName="[^"]*"', $nameValue
+    }
+    if ($VersionCode -gt 0) {
+        $codeValue = 'android:versionCode="' + $VersionCode + '"'
+        $xml = $xml -replace 'android:versionCode="[^"]*"', $codeValue
+    }
+    [IO.File]::WriteAllText($manifestToUse, $xml, (New-Object Text.UTF8Encoding($false)))
+    $shownName = if ($VersionName) { $VersionName } else { '(from manifest)' }
+    $shownCode = if ($VersionCode -gt 0) { "$VersionCode" } else { '(from manifest)' }
+    Write-Host ("      version -> " + $shownName + " (" + $shownCode + ")")
+}
+& $aapt2 link -o $unsigned -I $androidJar --manifest $manifestToUse `
     --min-sdk-version $minSdk --target-sdk-version $targetSdk `
     --java (Join-Path $build 'gen') $resZip
 if ($LASTEXITCODE -ne 0) { throw "aapt2 link failed" }
